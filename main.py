@@ -65,41 +65,56 @@ def is_red_light(frame):
     total_pixels = roi.shape[0] * roi.shape[1]
     return cv2.countNonZero(mask1 + mask2) / total_pixels > 0.12
 
-def save_violation(frame, label, bbox):
+def save_violation(frame, label, bbox, plate_bbox=None):
     ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     path = f"{OUTPUT_DIR}/{label}_{ts}.jpg"
-    x1, y1, x2, y2 = bbox
+
     out = frame.copy()
+
+    x1, y1, x2, y2 = bbox
     cv2.rectangle(out, (x1, y1), (x2, y2), (0, 0, 255), 3)
     cv2.putText(out, label, (x1, max(y1-10, 20)),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+    if plate_bbox:
+        px1, py1, px2, py2 = plate_bbox
+        cv2.rectangle(out, (px1, py1), (px2, py2), (255, 0, 0), 2)
+        cv2.putText(out, "PLATE DETECTED", (px1, py1-5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+    else:
+        cv2.putText(out, "PLATE NOT DETECTED",
+                    (x1, y2+30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
     cv2.imwrite(path, out)
-    print(f"[VIOLATION] {label} saved to {path}")
+    print(f"[VIOLATION] {label} saved -> {path}")
 
 # ===============================
 # VIDEO SETUP
 # ===============================
-print("[INFO] Looking for video at:", VIDEO_PATH)
-print("[INFO] Exists:", os.path.exists(VIDEO_PATH))
-
 cap = cv2.VideoCapture(VIDEO_PATH)
 if not cap.isOpened():
     raise ValueError(f"Could not open video at {VIDEO_PATH}")
 
 W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
 FPS = cap.get(cv2.CAP_PROP_FPS)
+if FPS == 0 or FPS is None:
+    FPS = 25  # fallback
 
-print(f"[INFO] Video dimensions: {W}x{H} @ {FPS} FPS")
+print(f"[INFO] Video: {W}x{H} @ {FPS} FPS")
 
-writer = cv2.VideoWriter(
-    OUTPUT_VIDEO,
-    cv2.VideoWriter_fourcc(*"mp4v"),
-    FPS,
-    (W, H)
-)
+fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+writer = cv2.VideoWriter(OUTPUT_VIDEO, fourcc, FPS, (W, H))
 
-captured = set()
+if not writer.isOpened():
+    raise RuntimeError("VideoWriter failed to open. Codec issue.")
+
+# ===============================
+# TRACKING STATE
+# ===============================
+captured = set()  # Track violation IDs to prevent duplicates
 frame_count = 0
 
 # ===============================
@@ -138,7 +153,7 @@ while True:
         elif label == "motorcycle":
             bikes.append(bbox)
             vehicles.append(("bike", bbox))
-        elif label in ["helmet", "hat"]:  # Some models detect helmets as hats
+        elif label in ["helmet", "hat"]:
             helmets.append(bbox)
         elif label in ["car", "bus", "truck"]:
             vehicles.append((label, bbox))
